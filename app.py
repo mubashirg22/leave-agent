@@ -1,16 +1,22 @@
+import os
+
 from fastapi import FastAPI
 import requests
 
 app = FastAPI()
 
-EMPLOYEE_AGENT_CARD = "https://employee-agent-fis1.onrender.com/.well-known/agent.json"
-EMPLOYEE_API = "https://employee-agent-fis1.onrender.com/employee"
+# Apigee Gateway URL
+APIGEE_GATEWAY ="https://poc.api.gevernova.com/agent-gateway"
+
+# API Key configured in Apigee Product/App
+API_KEY = "oJepoMdyIfmyxVFAGypBujEC6nEAZj3U6Yjcc4WB4Y0MwfoXwryuw"
 
 leave_data = {
     "1001": 12,
     "1002": 4,
     "1003": 20
 }
+
 
 @app.get("/")
 def home():
@@ -19,12 +25,13 @@ def home():
         "agent": "leave-agent"
     }
 
+
 @app.get("/.well-known/agent.json")
 def agent_card():
     return {
         "name": "leave-agent",
         "description": "Leave Approval Agent",
-        "version": "1.0",
+        "version": "2.0",
         "skills": [
             {
                 "id": "leave_approval",
@@ -33,20 +40,33 @@ def agent_card():
         ]
     }
 
+
 @app.get("/leave-approval/{empid}/{days}")
 def leave_approval(empid: str, days: int):
 
-    # Agent Discovery
-    card = requests.get(EMPLOYEE_AGENT_CARD).json()
+    try:
+        response = requests.get(
+            f"{APIGEE_GATEWAY}/employee-agent/{empid}",
+            headers={
+                "x-api-key": API_KEY
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        employee = response.json()
 
-    # Agent Invocation
-    employee = requests.get(
-        f"{EMPLOYEE_API}/{empid}"
-    ).json()
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "message": f"Could not reach employee agent: {e}"
+        }
 
+    # Employee existence is determined by the employee-agent lookup,
+    # not by leave balance (an employee can legitimately have 0 days left).
+    employee_found = empid in leave_data and employee.get("name") not in (None, "Unknown")
     balance = leave_data.get(empid, 0)
 
-    if balance == 0:
+    if not employee_found:
         decision = "Rejected"
         reason = "Employee not found"
 
@@ -63,7 +83,6 @@ def leave_approval(empid: str, days: int):
         reason = "Within policy limits"
 
     return {
-        "agentDiscovered": card["name"],
         "employee": employee,
         "leaveBalance": balance,
         "requestedDays": days,
